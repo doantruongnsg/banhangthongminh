@@ -29,7 +29,18 @@ import {
   EyeOff,
   Save,
   Download,
-  Upload
+  Upload,
+  Users,
+  Sparkles,
+  DollarSign,
+  CreditCard,
+  UserPlus,
+  Phone,
+  Mail,
+  MapPin,
+  FileText,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import {
   BarChart,
@@ -52,8 +63,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { Product, Category, Log, AppSettings, AppData } from './types';
-import { callGeminiAI, AI_MODELS, AiError } from './services/geminiService';
+import { Product, Category, Log, AppSettings, AppData, Customer, Transaction, SmartInputResult } from './types';
+import { callGeminiAI, AI_MODELS, AiError, parseSmartInput } from './services/geminiService';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -78,7 +89,7 @@ const INITIAL_PRODUCTS: Product[] = [
 
 export default function App() {
   // --- State ---
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'history' | 'settings' | 'ai-suggestions'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'history' | 'settings' | 'ai-suggestions' | 'customers'>('dashboard');
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [logs, setLogs] = useState<Log[]>([]);
@@ -97,6 +108,22 @@ export default function App() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [aiError, setAiError] = useState<AiError | null>(null);
   const [tempApiKey, setTempApiKey] = useState('');
+
+  // Customer & Debt states
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+  const [selectedCustomerForTransaction, setSelectedCustomerForTransaction] = useState<Customer | null>(null);
+  const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+
+  // Smart Input states  
+  const [smartInputText, setSmartInputText] = useState('');
+  const [smartInputParsing, setSmartInputParsing] = useState(false);
+  const [smartInputResult, setSmartInputResult] = useState<SmartInputResult | null>(null);
+  const [showSmartInputPreview, setShowSmartInputPreview] = useState(false);
 
   // Modal states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -117,6 +144,8 @@ export default function App() {
       setProducts(parsed.products || INITIAL_PRODUCTS);
       setLogs(parsed.logs || []);
       setSettings(parsed.settings || settings);
+      setCustomers(parsed.customers || []);
+      setTransactions(parsed.transactions || []);
     } else {
       setProducts(INITIAL_PRODUCTS);
     }
@@ -132,9 +161,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const dataToSave = { products, logs, settings };
+    const dataToSave = { products, logs, settings, customers, transactions };
     localStorage.setItem('smartsales_data', JSON.stringify(dataToSave));
-  }, [products, logs, settings]);
+  }, [products, logs, settings, customers, transactions]);
 
   // --- Helpers ---
   const formatCurrency = (value: number) => {
@@ -300,6 +329,148 @@ export default function App() {
     localStorage.setItem('gemini_selected_model', modelId);
   };
 
+  // --- Customer & Debt Handlers ---
+  const handleSaveCustomer = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const customerData: Partial<Customer> = {
+      name: formData.get('name') as string,
+      phone: formData.get('phone') as string,
+      email: formData.get('email') as string,
+      address: formData.get('address') as string,
+      notes: formData.get('notes') as string,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (editingCustomer) {
+      setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? { ...c, ...customerData } as Customer : c));
+    } else {
+      const newCustomer: Customer = {
+        id: Math.random().toString(36).substr(2, 9),
+        ...customerData as Customer,
+        createdAt: new Date().toISOString(),
+      };
+      setCustomers(prev => [...prev, newCustomer]);
+    }
+    setIsCustomerModalOpen(false);
+    setEditingCustomer(null);
+  };
+
+  const handleDeleteCustomer = (id: string) => {
+    if (confirm('Bạn có chắc chắn muốn xóa khách hàng này? Tất cả giao dịch liên quan cũng sẽ bị xóa.')) {
+      setCustomers(prev => prev.filter(c => c.id !== id));
+      setTransactions(prev => prev.filter(t => t.customerId !== id));
+    }
+  };
+
+  const handleSaveTransaction = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedCustomerForTransaction) return;
+    const formData = new FormData(e.currentTarget);
+    const newTransaction: Transaction = {
+      id: Math.random().toString(36).substr(2, 9),
+      customerId: selectedCustomerForTransaction.id,
+      type: formData.get('type') as 'purchase' | 'payment' | 'debt',
+      amount: Number(formData.get('amount')),
+      description: formData.get('description') as string,
+      date: formData.get('date') as string || new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    };
+    setTransactions(prev => [newTransaction, ...prev]);
+    setIsTransactionModalOpen(false);
+    setSelectedCustomerForTransaction(null);
+  };
+
+  const handleSmartInput = async () => {
+    if (!apiKey) { setShowApiKeyModal(true); return; }
+    if (!smartInputText.trim()) return;
+
+    setSmartInputParsing(true);
+    try {
+      const result = await parseSmartInput(smartInputText, apiKey, selectedModel);
+      setSmartInputResult(result);
+      setShowSmartInputPreview(true);
+    } catch (error: any) {
+      alert(`Lỗi phân tích: ${error?.message || 'Không xác định'}`);
+    } finally {
+      setSmartInputParsing(false);
+    }
+  };
+
+  const handleConfirmSmartInput = () => {
+    if (!smartInputResult) return;
+
+    // Create or find customer
+    let customerId: string;
+    const existingCustomer = smartInputResult.customer.phone
+      ? customers.find(c => c.phone === smartInputResult.customer.phone)
+      : null;
+
+    if (existingCustomer) {
+      customerId = existingCustomer.id;
+      // Update customer info if new data provided
+      setCustomers(prev => prev.map(c => c.id === existingCustomer.id ? {
+        ...c,
+        ...(smartInputResult.customer.name && { name: smartInputResult.customer.name }),
+        ...(smartInputResult.customer.address && { address: smartInputResult.customer.address }),
+        ...(smartInputResult.customer.email && { email: smartInputResult.customer.email }),
+        ...(smartInputResult.customer.notes && { notes: smartInputResult.customer.notes }),
+        updatedAt: new Date().toISOString(),
+      } : c));
+    } else {
+      customerId = Math.random().toString(36).substr(2, 9);
+      const newCustomer: Customer = {
+        id: customerId,
+        name: smartInputResult.customer.name || 'Khách hàng mới',
+        phone: smartInputResult.customer.phone || '',
+        email: smartInputResult.customer.email || '',
+        address: smartInputResult.customer.address || '',
+        notes: smartInputResult.customer.notes || '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setCustomers(prev => [...prev, newCustomer]);
+    }
+
+    // Create transactions
+    const newTransactions: Transaction[] = smartInputResult.transactions.map(t => ({
+      id: Math.random().toString(36).substr(2, 9),
+      customerId,
+      type: t.type,
+      amount: t.amount,
+      description: t.description,
+      date: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    }));
+    setTransactions(prev => [...newTransactions, ...prev]);
+
+    // Reset
+    setSmartInputResult(null);
+    setShowSmartInputPreview(false);
+    setSmartInputText('');
+  };
+
+  const getCustomerDebt = (customerId: string): number => {
+    return transactions
+      .filter(t => t.customerId === customerId)
+      .reduce((total, t) => {
+        if (t.type === 'purchase' || t.type === 'debt') return total + t.amount;
+        if (t.type === 'payment') return total - t.amount;
+        return total;
+      }, 0);
+  };
+
+  const totalDebt = useMemo(() => {
+    return customers.reduce((total, c) => total + Math.max(0, getCustomerDebt(c.id)), 0);
+  }, [customers, transactions]);
+
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => {
+      const term = customerSearchTerm.toLowerCase();
+      return c.name.toLowerCase().includes(term) || c.phone.includes(term);
+    });
+  }, [customers, customerSearchTerm]);
+
   // --- Computed ---
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
@@ -328,7 +499,7 @@ export default function App() {
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in duration-500">
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard
           title="Tổng giá trị kho"
           value={formatCurrency(stats.totalValue)}
@@ -353,6 +524,19 @@ export default function App() {
           value={stats.productCount}
           icon={<LayoutDashboard className="text-purple-500" />}
           trend="Đang kinh doanh"
+        />
+        <StatCard
+          title="Khách hàng"
+          value={customers.length}
+          icon={<Users className="text-indigo-500" />}
+          trend="Đang quản lý"
+        />
+        <StatCard
+          title="Tổng công nợ"
+          value={formatCurrency(totalDebt)}
+          icon={<CreditCard className="text-rose-500" />}
+          color={totalDebt > 0 ? "text-rose-600" : "text-emerald-600"}
+          trend={totalDebt > 0 ? "Cần thu hồi" : "Không có nợ"}
         />
       </div>
 
@@ -729,6 +913,196 @@ export default function App() {
       </div>
     </div>
   );
+  // --- Customer Tab ---
+  const renderCustomers = () => (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {/* Smart Input Section */}
+      <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 p-6 rounded-3xl shadow-xl text-white relative overflow-hidden">
+        <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
+        <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 bg-white/20 rounded-xl backdrop-blur-sm">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-lg">Nhập liệu thông minh bằng AI</h3>
+              <p className="text-sm text-white/70">Nhập văn bản tự nhiên, AI sẽ tự phân tích thông tin khách hàng & giao dịch</p>
+            </div>
+          </div>
+          <textarea
+            className="w-full p-4 bg-white/15 backdrop-blur-md border border-white/20 rounded-2xl text-white placeholder-white/50 outline-none focus:border-white/50 focus:bg-white/20 transition-all resize-none text-sm"
+            rows={3}
+            placeholder='Ví dụ: "Chị Lan, SĐT 0901234567, mua 5 thùng sữa tổng 1.750.000đ, trả trước 1 triệu, nợ 750k"'
+            value={smartInputText}
+            onChange={(e) => setSmartInputText(e.target.value)}
+          />
+          <button
+            onClick={handleSmartInput}
+            disabled={smartInputParsing || !smartInputText.trim()}
+            className="mt-3 w-full py-3 bg-white text-indigo-700 rounded-xl font-bold hover:bg-white/90 transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {smartInputParsing ? (
+              <><div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /> Đang phân tích...</>
+            ) : (
+              <><Sparkles size={18} /> Phân tích bằng AI</>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Header + Actions */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+          <input
+            type="text"
+            placeholder="Tìm khách hàng (tên, SĐT)..."
+            className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+            value={customerSearchTerm}
+            onChange={(e) => setCustomerSearchTerm(e.target.value)}
+          />
+        </div>
+        <button
+          onClick={() => { setEditingCustomer(null); setIsCustomerModalOpen(true); }}
+          className="px-4 py-2 bg-indigo-500 text-white rounded-xl font-medium flex items-center gap-2 hover:bg-indigo-600 transition-all whitespace-nowrap shadow-lg shadow-indigo-500/20"
+        >
+          <UserPlus size={18} />
+          Thêm khách hàng
+        </button>
+      </div>
+
+      {/* Customer Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tổng khách hàng</div>
+          <div className="text-2xl font-bold text-slate-900">{customers.length}</div>
+        </div>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tổng công nợ</div>
+          <div className="text-2xl font-bold text-rose-600">{formatCurrency(totalDebt)}</div>
+        </div>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Khách có nợ</div>
+          <div className="text-2xl font-bold text-amber-600">{customers.filter(c => getCustomerDebt(c.id) > 0).length}</div>
+        </div>
+      </div>
+
+      {/* Customer List */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        {filteredCustomers.length > 0 ? filteredCustomers.map(customer => {
+          const debt = getCustomerDebt(customer.id);
+          const customerTransactions = transactions.filter(t => t.customerId === customer.id);
+          const isExpanded = expandedCustomerId === customer.id;
+
+          return (
+            <div key={customer.id} className="border-b border-slate-50 last:border-b-0">
+              <div
+                className="p-4 md:p-5 flex items-center gap-4 hover:bg-slate-50/50 transition-colors cursor-pointer"
+                onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
+              >
+                <div className="w-11 h-11 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                  <Users className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-slate-900">{customer.name}</div>
+                  <div className="text-xs text-slate-400 flex items-center gap-3 mt-0.5">
+                    {customer.phone && <span className="flex items-center gap-1"><Phone size={11} /> {customer.phone}</span>}
+                    {customer.email && <span className="flex items-center gap-1"><Mail size={11} /> {customer.email}</span>}
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className={cn("text-lg font-bold", debt > 0 ? "text-rose-600" : "text-emerald-600")}>
+                    {debt > 0 ? `Nợ ${formatCurrency(debt)}` : 'Không nợ'}
+                  </div>
+                  <div className="text-[10px] text-slate-400">{customerTransactions.length} giao dịch</div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setSelectedCustomerForTransaction(customer); setIsTransactionModalOpen(true); }}
+                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                    title="Thêm giao dịch"
+                  >
+                    <Plus size={16} />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setEditingCustomer(customer); setIsCustomerModalOpen(true); }}
+                    className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Sửa"
+                  >
+                    <Edit3 size={16} />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer.id); }}
+                    className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Xóa"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  {isExpanded ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                </div>
+              </div>
+
+              {/* Expanded Transaction Details */}
+              {isExpanded && (
+                <div className="px-5 pb-5 bg-slate-50/50">
+                  {customer.address && (
+                    <div className="text-xs text-slate-500 flex items-center gap-1 mb-3 pt-2">
+                      <MapPin size={12} /> {customer.address}
+                    </div>
+                  )}
+                  {customer.notes && (
+                    <div className="text-xs text-slate-500 flex items-center gap-1 mb-3">
+                      <FileText size={12} /> {customer.notes}
+                    </div>
+                  )}
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lịch sử giao dịch</div>
+                  {customerTransactions.length > 0 ? (
+                    <div className="space-y-2">
+                      {customerTransactions.map(t => (
+                        <div key={t.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-100">
+                          <div className={cn(
+                            "p-1.5 rounded-lg",
+                            t.type === 'purchase' ? "bg-blue-100 text-blue-600" :
+                              t.type === 'payment' ? "bg-emerald-100 text-emerald-600" :
+                                "bg-rose-100 text-rose-600"
+                          )}>
+                            {t.type === 'purchase' ? <Package size={14} /> :
+                              t.type === 'payment' ? <DollarSign size={14} /> :
+                                <CreditCard size={14} />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-slate-800">{t.description}</div>
+                            <div className="text-[10px] text-slate-400">{t.date}</div>
+                          </div>
+                          <div className={cn(
+                            "font-bold text-sm",
+                            t.type === 'payment' ? "text-emerald-600" : "text-rose-600"
+                          )}>
+                            {t.type === 'payment' ? '-' : '+'}{formatCurrency(t.amount)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-400 text-center py-4">Chưa có giao dịch nào.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        }) : (
+          <div className="p-12 text-center text-slate-400">
+            <div className="flex flex-col items-center gap-3">
+              <Users size={48} className="opacity-20" />
+              <p>{customers.length === 0 ? 'Chưa có khách hàng nào. Hãy thêm mới hoặc sử dụng nhập liệu thông minh!' : 'Không tìm thấy khách hàng phù hợp.'}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderSettings = () => (
     <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in duration-500">
       {/* Model Selector Cards */}
@@ -835,7 +1209,7 @@ export default function App() {
           <div className="pt-4 border-t border-slate-100 flex gap-4">
             <button
               onClick={() => {
-                const data = JSON.stringify({ products, logs, settings });
+                const data = JSON.stringify({ products, logs, settings, customers, transactions });
                 const blob = new Blob([data], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -863,6 +1237,8 @@ export default function App() {
                         if (data.products) setProducts(data.products);
                         if (data.logs) setLogs(data.logs);
                         if (data.settings) setSettings(data.settings);
+                        if (data.customers) setCustomers(data.customers);
+                        if (data.transactions) setTransactions(data.transactions);
                         alert('Nhập dữ liệu thành công!');
                       } catch (err) {
                         alert('File không hợp lệ!');
@@ -902,6 +1278,12 @@ export default function App() {
             onClick={() => setActiveTab('inventory')}
             icon={<Package size={20} />}
             label="Kho hàng"
+          />
+          <NavItem
+            active={activeTab === 'customers'}
+            onClick={() => setActiveTab('customers')}
+            icon={<Users size={20} />}
+            label="Khách hàng"
           />
           <NavItem
             active={activeTab === 'history'}
@@ -973,6 +1355,7 @@ export default function App() {
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && renderDashboard()}
           {activeTab === 'inventory' && renderInventory()}
+          {activeTab === 'customers' && renderCustomers()}
           {activeTab === 'history' && renderHistory()}
           {activeTab === 'ai-suggestions' && renderAiSuggestions()}
           {activeTab === 'settings' && renderSettings()}
@@ -983,6 +1366,7 @@ export default function App() {
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-3 flex items-center justify-between z-50">
         <MobileNavItem active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={24} />} />
         <MobileNavItem active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={24} />} />
+        <MobileNavItem active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} icon={<Users size={24} />} />
         <MobileNavItem active={activeTab === 'ai-suggestions'} onClick={() => setActiveTab('ai-suggestions')} icon={<BrainCircuit size={24} />} />
         <MobileNavItem active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={24} />} />
         <MobileNavItem active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<SettingsIcon size={24} />} />
@@ -1069,6 +1453,139 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </Modal>
+        )}
+
+        {/* Customer Modal */}
+        {isCustomerModalOpen && (
+          <Modal title={editingCustomer ? "Chỉnh sửa khách hàng" : "Thêm khách hàng mới"} onClose={() => { setIsCustomerModalOpen(false); setEditingCustomer(null); }}>
+            <form onSubmit={handleSaveCustomer} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Tên khách hàng *</label>
+                  <input name="name" defaultValue={editingCustomer?.name} required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Số điện thoại</label>
+                  <input name="phone" defaultValue={editingCustomer?.phone} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Email</label>
+                  <input name="email" type="email" defaultValue={editingCustomer?.email} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Địa chỉ</label>
+                  <input name="address" defaultValue={editingCustomer?.address} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Ghi chú</label>
+                <textarea name="notes" defaultValue={editingCustomer?.notes} rows={2} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => { setIsCustomerModalOpen(false); setEditingCustomer(null); }} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-all">Hủy</button>
+                <button type="submit" className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-500/20">Lưu khách hàng</button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {/* Transaction Modal */}
+        {isTransactionModalOpen && selectedCustomerForTransaction && (
+          <Modal title={`Thêm giao dịch — ${selectedCustomerForTransaction.name}`} onClose={() => { setIsTransactionModalOpen(false); setSelectedCustomerForTransaction(null); }}>
+            <form onSubmit={handleSaveTransaction} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Loại giao dịch</label>
+                <select name="type" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="purchase">🛒 Mua hàng (tăng nợ)</option>
+                  <option value="payment">💰 Thanh toán (giảm nợ)</option>
+                  <option value="debt">📝 Ghi nợ thêm</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Số tiền (VND)</label>
+                <input type="number" name="amount" required min="0" className="w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-xl font-bold text-center focus:border-indigo-500 outline-none transition-all" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Mô tả</label>
+                <input name="description" required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="VD: Mua 5 thùng sữa" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Ngày</label>
+                <input type="date" name="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => { setIsTransactionModalOpen(false); setSelectedCustomerForTransaction(null); }} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-all">Hủy</button>
+                <button type="submit" className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-500/20">Lưu giao dịch</button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {/* Smart Input Preview Modal */}
+        {showSmartInputPreview && smartInputResult && (
+          <Modal title="Xác nhận thông tin AI phân tích" onClose={() => { setShowSmartInputPreview(false); setSmartInputResult(null); }}>
+            <div className="space-y-5">
+              {/* Customer Info */}
+              <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-2xl">
+                <div className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-2">Thông tin khách hàng</div>
+                <div className="space-y-1.5 text-sm text-slate-700">
+                  {smartInputResult.customer.name && <div className="flex gap-2"><span className="font-medium text-slate-500 w-16">Tên:</span> <span className="font-bold">{smartInputResult.customer.name}</span></div>}
+                  {smartInputResult.customer.phone && <div className="flex gap-2"><span className="font-medium text-slate-500 w-16">SĐT:</span> {smartInputResult.customer.phone}</div>}
+                  {smartInputResult.customer.email && <div className="flex gap-2"><span className="font-medium text-slate-500 w-16">Email:</span> {smartInputResult.customer.email}</div>}
+                  {smartInputResult.customer.address && <div className="flex gap-2"><span className="font-medium text-slate-500 w-16">Địa chỉ:</span> {smartInputResult.customer.address}</div>}
+                  {smartInputResult.customer.notes && <div className="flex gap-2"><span className="font-medium text-slate-500 w-16">Ghi chú:</span> {smartInputResult.customer.notes}</div>}
+                </div>
+              </div>
+
+              {/* Transactions */}
+              {smartInputResult.transactions.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Giao dịch được phát hiện</div>
+                  {smartInputResult.transactions.map((t, idx) => (
+                    <div key={idx} className={cn(
+                      "p-3 rounded-xl border flex items-center gap-3",
+                      t.type === 'purchase' ? "bg-blue-50 border-blue-200" :
+                        t.type === 'payment' ? "bg-emerald-50 border-emerald-200" :
+                          "bg-rose-50 border-rose-200"
+                    )}>
+                      <div className={cn(
+                        "p-2 rounded-lg",
+                        t.type === 'purchase' ? "bg-blue-100 text-blue-600" :
+                          t.type === 'payment' ? "bg-emerald-100 text-emerald-600" :
+                            "bg-rose-100 text-rose-600"
+                      )}>
+                        {t.type === 'purchase' ? <Package size={16} /> : t.type === 'payment' ? <DollarSign size={16} /> : <CreditCard size={16} />}
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">{t.description}</div>
+                        <div className="text-[10px] text-slate-400 uppercase">
+                          {t.type === 'purchase' ? 'Mua hàng' : t.type === 'payment' ? 'Thanh toán' : 'Ghi nợ'}
+                        </div>
+                      </div>
+                      <div className={cn("font-bold", t.type === 'payment' ? "text-emerald-600" : "text-rose-600")}>
+                        {formatCurrency(t.amount)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => { setShowSmartInputPreview(false); setSmartInputResult(null); }}
+                  className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  onClick={handleConfirmSmartInput}
+                  className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+                >
+                  <Check size={18} /> Xác nhận & Lưu
+                </button>
+              </div>
+            </div>
           </Modal>
         )}
 
