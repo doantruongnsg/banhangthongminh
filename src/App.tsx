@@ -80,11 +80,11 @@ const INITIAL_CATEGORIES: Category[] = [
 ];
 
 const INITIAL_PRODUCTS: Product[] = [
-  { id: 'p1', name: 'iPhone 15 Pro', category: 'Điện tử', price: 28000000, stock: 15, minStock: 5, unit: 'Cái', taxRate: 10, description: 'Điện thoại cao cấp Apple', updatedAt: new Date().toISOString() },
-  { id: 'p2', name: 'Nồi cơm điện Sharp', category: 'Gia dụng', price: 1200000, stock: 3, minStock: 10, unit: 'Cái', taxRate: 8, description: 'Nồi cơm điện tử đa năng', updatedAt: new Date().toISOString() },
-  { id: 'p3', name: 'Áo thun Cotton', category: 'Thời trang', price: 250000, stock: 100, minStock: 20, unit: 'Cái', taxRate: 5, description: 'Áo thun 100% cotton thoáng mát', updatedAt: new Date().toISOString() },
-  { id: 'p4', name: 'Sữa tươi Vinamilk', category: 'Thực phẩm', price: 35000, stock: 500, minStock: 50, unit: 'Hộp', taxRate: 0, description: 'Sữa tươi tiệt trùng 1L', updatedAt: new Date().toISOString() },
-  { id: 'p5', name: 'Bàn phím cơ AKKO', category: 'Điện tử', price: 1500000, stock: 8, minStock: 10, unit: 'Cái', taxRate: 10, description: 'Bàn phím cơ hotswap', updatedAt: new Date().toISOString() },
+  { id: 'p1', name: 'iPhone 15 Pro', category: 'Điện tử', price: 28000000, importPrice: 22000000, stock: 15, minStock: 5, unit: 'Cái', taxRate: 10, description: 'Điện thoại cao cấp Apple', updatedAt: new Date().toISOString() },
+  { id: 'p2', name: 'Nồi cơm điện Sharp', category: 'Gia dụng', price: 1200000, importPrice: 850000, stock: 3, minStock: 10, unit: 'Cái', taxRate: 8, description: 'Nồi cơm điện tử đa năng', updatedAt: new Date().toISOString() },
+  { id: 'p3', name: 'Áo thun Cotton', category: 'Thời trang', price: 250000, importPrice: 120000, stock: 100, minStock: 20, unit: 'Cái', taxRate: 5, description: 'Áo thun 100% cotton thoáng mát', updatedAt: new Date().toISOString() },
+  { id: 'p4', name: 'Sữa tươi Vinamilk', category: 'Thực phẩm', price: 35000, importPrice: 25000, stock: 500, minStock: 50, unit: 'Hộp', taxRate: 0, description: 'Sữa tươi tiệt trùng 1L', updatedAt: new Date().toISOString() },
+  { id: 'p5', name: 'Bàn phím cơ AKKO', category: 'Điện tử', price: 1500000, importPrice: 950000, stock: 8, minStock: 10, unit: 'Cái', taxRate: 10, description: 'Bàn phím cơ hotswap', updatedAt: new Date().toISOString() },
 ];
 
 export default function App() {
@@ -131,6 +131,13 @@ export default function App() {
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [stockAction, setStockAction] = useState<'in' | 'out'>('in');
   const [selectedProductForStock, setSelectedProductForStock] = useState<Product | null>(null);
+
+  // Category management modal
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [categoryForm, setCategoryForm] = useState({ name: '', color: '#10b981', icon: 'Tag' });
+
+  const PRESET_ICONS = ['Cpu', 'Home', 'Shirt', 'Coffee', 'ShoppingBag', 'Utensils', 'Car', 'Pill', 'BookOpen', 'Dumbbell', 'Music', 'Tag'];
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
@@ -191,6 +198,7 @@ export default function App() {
       name: formData.get('name') as string,
       category: formData.get('category') as string,
       price: Number(formData.get('price')),
+      importPrice: Number(formData.get('importPrice')),
       stock: Number(formData.get('stock')),
       minStock: Number(formData.get('minStock')),
       unit: formData.get('unit') as string,
@@ -222,6 +230,11 @@ export default function App() {
     const quantity = Number(formData.get('quantity'));
     const type = stockAction;
 
+    let profit: number | undefined;
+    if (type === 'out' && selectedProductForStock.importPrice) {
+      profit = (selectedProductForStock.price - selectedProductForStock.importPrice) * quantity;
+    }
+
     setProducts(prev => prev.map(p => {
       if (p.id === selectedProductForStock.id) {
         const newStock = type === 'in' ? p.stock + quantity : p.stock - quantity;
@@ -230,12 +243,21 @@ export default function App() {
       return p;
     }));
 
-    addLog(
-      type === 'in' ? 'Nhập kho' : 'Xuất kho',
-      selectedProductForStock,
+    const detailMsg = type === 'in'
+      ? `Nhập thêm ${quantity} ${selectedProductForStock.unit}`
+      : `Xuất đi ${quantity} ${selectedProductForStock.unit}${profit !== undefined ? ` — Lợi nhuận: +${profit.toLocaleString('vi-VN')}đ` : ''}`;
+
+    const newLog: Log = {
+      id: Math.random().toString(36).substr(2, 9),
+      action: type === 'in' ? 'Nhập kho' : 'Xuất kho',
+      productId: selectedProductForStock.id,
+      productName: selectedProductForStock.name,
       quantity,
-      type === 'in' ? `Nhập thêm ${quantity} ${selectedProductForStock.unit}` : `Xuất đi ${quantity} ${selectedProductForStock.unit}`
-    );
+      timestamp: new Date().toISOString(),
+      details: detailMsg,
+      profit,
+    };
+    setLogs(prev => [newLog, ...prev]);
 
     setIsStockModalOpen(false);
     setSelectedProductForStock(null);
@@ -248,6 +270,46 @@ export default function App() {
       if (product) addLog('Xóa sản phẩm', product, 0, 'Xóa khỏi danh mục');
     }
   };
+
+  // --- Category Handlers ---
+  const handleSaveCategory = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!categoryForm.name.trim()) return;
+    if (editingCategory) {
+      const oldName = editingCategory.name;
+      setCategories(prev => prev.map(c => c.id === editingCategory.id
+        ? { ...c, name: categoryForm.name, color: categoryForm.color, icon: categoryForm.icon }
+        : c
+      ));
+      // Update products that use this category name
+      if (oldName !== categoryForm.name) {
+        setProducts(prev => prev.map(p => p.category === oldName ? { ...p, category: categoryForm.name } : p));
+      }
+    } else {
+      const newCat: Category = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: categoryForm.name,
+        color: categoryForm.color,
+        icon: categoryForm.icon,
+      };
+      setCategories(prev => [...prev, newCat]);
+    }
+    setIsCategoryModalOpen(false);
+    setEditingCategory(null);
+    setCategoryForm({ name: '', color: '#10b981', icon: 'Tag' });
+  };
+
+  const handleDeleteCategory = (cat: Category) => {
+    const inUse = products.some(p => p.category === cat.name);
+    if (inUse) {
+      alert(`Không thể xóa! Danh mục "’${cat.name}’" đang được sử dụng bởi ${products.filter(p => p.category === cat.name).length} sản phẩm.`);
+      return;
+    }
+    if (confirm(`Xóa danh mục "${cat.name}"?`)) {
+      setCategories(prev => prev.filter(c => c.id !== cat.id));
+    }
+  };
+
 
   const handleExportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(products);
@@ -484,8 +546,11 @@ export default function App() {
     const totalValue = products.reduce((acc, p) => acc + (p.price * p.stock), 0);
     const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
     const totalItems = products.reduce((acc, p) => acc + p.stock, 0);
-    return { totalValue, lowStockCount, totalItems, productCount: products.length };
-  }, [products]);
+    const totalProfit = logs
+      .filter(l => l.action === 'Xuất kho' && l.profit !== undefined)
+      .reduce((acc, l) => acc + (l.profit || 0), 0);
+    return { totalValue, lowStockCount, totalItems, productCount: products.length, totalProfit };
+  }, [products, logs]);
 
   const chartData = useMemo(() => {
     return categories.map(cat => ({
@@ -499,7 +564,7 @@ export default function App() {
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in duration-500">
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         <StatCard
           title="Tổng giá trị kho"
           value={formatCurrency(stats.totalValue)}
@@ -538,7 +603,16 @@ export default function App() {
           color={totalDebt > 0 ? "text-rose-600" : "text-emerald-600"}
           trend={totalDebt > 0 ? "Cần thu hồi" : "Không có nợ"}
         />
+        <StatCard
+          title="Tổng lợi nhuận"
+          value={formatCurrency(stats.totalProfit)}
+          icon={<DollarSign className="text-green-500" />}
+          color={stats.totalProfit > 0 ? "text-green-600" : "text-slate-500"}
+          trend="Từ các đơn xuất kho"
+        />
       </div>
+
+
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Chart Panel */}
@@ -611,18 +685,20 @@ export default function App() {
       </div>
 
       {/* Low Stock Alerts */}
-      {stats.lowStockCount > 0 && (
-        <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-4">
-          <div className="p-2 bg-amber-100 rounded-full">
-            <AlertTriangle className="text-amber-600 w-5 h-5" />
+      {
+        stats.lowStockCount > 0 && (
+          <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-4">
+            <div className="p-2 bg-amber-100 rounded-full">
+              <AlertTriangle className="text-amber-600 w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-bold text-amber-900">Cảnh báo tồn kho thấp!</h4>
+              <p className="text-sm text-amber-700">Có {stats.lowStockCount} sản phẩm đang ở mức báo động. Hãy kiểm tra và nhập hàng sớm.</p>
+            </div>
           </div>
-          <div>
-            <h4 className="font-bold text-amber-900">Cảnh báo tồn kho thấp!</h4>
-            <p className="text-sm text-amber-700">Có {stats.lowStockCount} sản phẩm đang ở mức báo động. Hãy kiểm tra và nhập hàng sớm.</p>
-          </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 
   const renderInventory = () => (
@@ -676,6 +752,7 @@ export default function App() {
               <tr className="bg-slate-50/50 border-bottom border-slate-100">
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Sản phẩm</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Danh mục</th>
+                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Giá nhập</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Giá bán</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Tồn kho</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Trạng thái</th>
@@ -693,6 +770,9 @@ export default function App() {
                     <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
                       {product.category}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-medium text-slate-400">
+                    {product.importPrice ? formatCurrency(product.importPrice) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-6 py-4 text-right font-medium text-slate-700">
                     {formatCurrency(product.price)}
@@ -755,7 +835,7 @@ export default function App() {
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <Search size={40} className="opacity-20" />
                       <p>Không tìm thấy sản phẩm nào phù hợp.</p>
@@ -774,12 +854,21 @@ export default function App() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-xl">Lịch sử hoạt động</h3>
-        <button
-          onClick={() => setLogs([])}
-          className="text-xs text-red-500 hover:underline"
-        >
-          Xóa toàn bộ lịch sử
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleExportOrdersExcel}
+            className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium flex items-center gap-2 hover:bg-emerald-600 transition-all text-sm"
+          >
+            <Download size={16} />
+            Xuất Excel
+          </button>
+          <button
+            onClick={() => setLogs([])}
+            className="text-xs text-red-500 hover:underline"
+          >
+            Xóa toàn bộ lịch sử
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -799,7 +888,14 @@ export default function App() {
               <div className="flex-1">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-bold text-slate-900">{log.action}</span>
-                  <span className="text-xs text-slate-400">{format(new Date(log.timestamp), settings.dateFormat)}</span>
+                  <div className="flex items-center gap-2">
+                    {log.action === 'Xuất kho' && log.profit !== undefined && log.profit > 0 && (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                        +{formatCurrency(log.profit)} lợi nhuận
+                      </span>
+                    )}
+                    <span className="text-xs text-slate-400">{format(new Date(log.timestamp), settings.dateFormat)}</span>
+                  </div>
                 </div>
                 <p className="text-sm text-slate-600">
                   <span className="font-medium text-slate-800">{log.productName}</span>: {log.details}
